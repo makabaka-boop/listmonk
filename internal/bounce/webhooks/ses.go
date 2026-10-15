@@ -169,8 +169,11 @@ func (s *SES) ProcessBounce(b []byte) (models.Bounce, error) {
 		CampaignUUID: campUUID,
 		Type:         typ,
 		Source:       "ses",
-		Meta:         json.RawMessage(n.Message),
-		CreatedAt:    time.Time(m.Mail.Timestamp),
+		// The SNS MessageId uniquely identifies a published notification and
+		// stays the same across SNS redeliveries of the same notification.
+		EventID:   n.MessageId,
+		Meta:      json.RawMessage(n.Message),
+		CreatedAt: time.Time(m.Mail.Timestamp),
 	}, nil
 }
 

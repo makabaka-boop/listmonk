@@ -13,11 +13,13 @@ const (
 
 // Bounce represents a single bounce event.
 type Bounce struct {
-	ID        int             `db:"id" json:"id"`
-	Type      string          `db:"type" json:"type"`
-	Source    string          `db:"source" json:"source"`
-	Meta      json.RawMessage `db:"meta" json:"meta"`
-	CreatedAt time.Time       `db:"created_at" json:"created_at"`
+	ID      int             `db:"id" json:"id"`
+	Type    string          `db:"type" json:"type"`
+	Source  string          `db:"source" json:"source"`
+	EventID string          `db:"event_id" json:"event_id,omitempty"`
+	Meta    json.RawMessage `db:"meta" json:"meta"`
+
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
 
 	// One of these should be provided.
 	Email            string `db:"email" json:"email,omitempty"`

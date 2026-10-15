@@ -17,6 +17,7 @@ var reSMTPStatus = regexp.MustCompile(`\b([245]\.\d\.\d)\b`)
 
 type azureEvent struct {
 	EventType string          `json:"eventType"`
+	ID        string          `json:"id"`
 	Data      azureEventData  `json:"data"`
 	RawData   json.RawMessage `json:"-"`
 }
@@ -129,6 +130,7 @@ func (a *Azure) ProcessBounce(req *http.Request, b []byte) ([]models.Bounce, err
 		out = append(out, models.Bounce{
 			Email:     email,
 			Type:      typ,
+			EventID:   strings.TrimSpace(ev.ID),
 			Meta:      json.RawMessage(ev.RawData),
 			Source:    "azure",
 			CreatedAt: createdAt,

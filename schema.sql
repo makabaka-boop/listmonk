@@ -308,6 +308,7 @@ CREATE TABLE bounces (
     campaign_id      INTEGER NULL REFERENCES campaigns(id) ON DELETE SET NULL ON UPDATE CASCADE,
     type             bounce_type NOT NULL DEFAULT 'hard',
     source           TEXT NOT NULL DEFAULT '',
+    event_id         TEXT NOT NULL DEFAULT '',
     meta             JSONB NOT NULL DEFAULT '{}',
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -315,6 +316,9 @@ DROP INDEX IF EXISTS idx_bounces_sub_id; CREATE INDEX idx_bounces_sub_id ON boun
 DROP INDEX IF EXISTS idx_bounces_camp_id; CREATE INDEX idx_bounces_camp_id ON bounces(campaign_id);
 DROP INDEX IF EXISTS idx_bounces_source; CREATE INDEX idx_bounces_source ON bounces(source);
 DROP INDEX IF EXISTS idx_bounces_date; CREATE INDEX idx_bounces_date ON bounces(created_at);
+-- Deduplicate re-delivered webhook notifications from the same source+event
+-- for a subscriber. event_id='' (legacy/mailbox bounces) is excluded.
+DROP INDEX IF EXISTS idx_bounces_event; CREATE UNIQUE INDEX idx_bounces_event ON bounces(source, event_id, subscriber_id) WHERE event_id <> '';
 
 -- roles
 DROP TABLE IF EXISTS roles CASCADE;

@@ -22,6 +22,10 @@ type sendgridNotif struct {
 	Event                string `json:"event"`
 	BounceClassification string `json:"bounce_classification"`
 
+	// Unique identifier of an individual event. SendGrid resends the same
+	// sg_event_id when it redelivers a webhook notification.
+	SGEventID string `json:"sg_event_id"`
+
 	// SendGrid flattens all X-headers and adds them to the bounce
 	// event notification.
 	CampaignUUID string `json:"XListmonkCampaign"`
@@ -76,6 +80,7 @@ func (s *Sendgrid) ProcessBounce(sig, timestamp string, b []byte) ([]models.Boun
 			CampaignUUID: n.CampaignUUID,
 			Email:        strings.ToLower(n.Email),
 			Type:         typ,
+			EventID:      n.SGEventID,
 			Meta:         json.RawMessage(b),
 			Source:       "sendgrid",
 			CreatedAt:    tstamp,

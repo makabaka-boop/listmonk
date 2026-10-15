@@ -1,33 +1,65 @@
 -- name: record-bounce
--- Insert a bounce and count the bounces for the subscriber and either unsubscribe them,
+-- Insert a bounce if it isn't a re-delivered duplicate and return the resolved
+-- subscriber, the post-insert bounce count for the type and whether a row was
+-- actually inserted. The caller applies the configured bounce action in the
+-- same transaction only when `inserted` is true.
 WITH sub AS (
     SELECT id, status FROM subscribers WHERE CASE WHEN $1 != '' THEN uuid = $1::UUID ELSE email = $2 END
 ),
 camp AS (
     SELECT id FROM campaigns WHERE $3 != '' AND uuid = $3::UUID
 ),
+-- If an event_id ($9) is present, check whether the same event from the same
+-- source has already been recorded for the subscriber. Re-delivered provider
+-- notifications (retries, service restarts, duplicates within a batch) are
+-- recorded and counted only once. An empty event_id always passes this check
+-- and preserves the legacy behaviour.
+dup AS (
+    SELECT TRUE AS seen
+    FROM bounces
+    WHERE $9 <> ''
+        AND source = $5
+        AND event_id = $9
+        AND subscriber_id = (SELECT id FROM sub)
+),
+-- Add a +1 to include the current insertion that is happening. For duplicate
+-- events no row is inserted, so the +1 and the count are skipped.
 num AS (
-    -- Add a +1 to include the current insertion that is happening.
-    SELECT COUNT(*) + 1 AS num FROM bounces WHERE subscriber_id = (SELECT id FROM sub) AND type = $4
+    SELECT COUNT(*) + 1 AS num FROM bounces
+    WHERE NOT EXISTS (SELECT 1 FROM dup)
+        AND subscriber_id = (SELECT id FROM sub) AND type = $4
 ),
--- block1 and block2 will run when $8 = 'blocklist' and the number of bounces exceed $8.
-block1 AS (
-    UPDATE subscribers SET status='blocklisted'
-    WHERE $9 = 'blocklist' AND (SELECT num FROM num) >= $8 AND id = (SELECT id FROM sub) AND (SELECT status FROM sub) != 'blocklisted'
-),
-block2 AS (
-    UPDATE subscriber_lists SET status='unsubscribed'
-    WHERE $9 = 'unsubscribe' AND (SELECT num FROM num) >= $8 AND subscriber_id = (SELECT id FROM sub) AND (SELECT status FROM sub) != 'blocklisted'
-),
-bounce AS (
-    -- Record the bounce if the subscriber is not already blocklisted;
-    INSERT INTO bounces (subscriber_id, campaign_id, type, source, meta, created_at)
-    SELECT (SELECT id FROM sub), (SELECT id FROM camp), $4, $5, $6, $7
-    WHERE NOT EXISTS (SELECT 1 WHERE (SELECT status FROM sub) = 'blocklisted' OR (SELECT num FROM num) > $8)
+-- Record the bounce if the subscriber exists, is not already blocklisted and
+-- the threshold is not yet exceeded. The unique partial index on
+-- (source, event_id, subscriber_id) together with ON CONFLICT guards against
+-- concurrent re-deliveries that both race past the dup check. Only a row
+-- actually returned here (and hence a non-duplicate event) can trigger the
+-- follow-up unsubscribe / blocklist / delete action.
+ins AS (
+    INSERT INTO bounces (subscriber_id, campaign_id, type, source, meta, created_at, event_id)
+    SELECT (SELECT id FROM sub), (SELECT id FROM camp), $4, $5, $6, $7, $9
+    WHERE NOT EXISTS (SELECT 1 FROM dup)
+        AND (SELECT id FROM sub) IS NOT NULL
+        AND (SELECT status FROM sub) <> 'blocklisted'
+        AND (SELECT num FROM num) <= $8
+    ON CONFLICT (source, event_id, subscriber_id) WHERE event_id <> '' DO NOTHING
+    RETURNING subscriber_id
 )
--- This delete  will only run when $9 = 'delete' and the number of bounces exceed $8.
-DELETE FROM subscribers
-    WHERE $9 = 'delete' AND (SELECT num FROM num) >= $8 AND id = (SELECT id FROM sub);
+SELECT COALESCE((SELECT id FROM sub), 0) AS subscriber_id,
+    (SELECT num FROM num) AS num,
+    EXISTS (SELECT 1 FROM ins) AS inserted;
+
+-- name: blocklist-bounced-subscriber
+UPDATE subscribers SET status='blocklisted'
+    WHERE id = $1 AND status <> 'blocklisted';
+
+-- name: unsubscribe-bounced-subscriber
+UPDATE subscriber_lists SET status='unsubscribed'
+    WHERE subscriber_id = $1
+        AND $1 IN (SELECT id FROM subscribers WHERE status <> 'blocklisted');
+
+-- name: delete-bounced-subscriber
+DELETE FROM subscribers WHERE id = $1;
 
 -- name: query-bounces
 SELECT COUNT(*) OVER () AS total,

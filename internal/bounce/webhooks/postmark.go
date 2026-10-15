@@ -89,11 +89,19 @@ func (p *Postmark) ProcessBounce(b []byte, c echo.Context) ([]models.Bounce, err
 		campUUID = v
 	}
 
+	// The bounce ID is unique per server, so combine ServerID and ID to get a
+	// globally stable event identifier across webhook redeliveries.
+	eventID := ""
+	if n.ID != 0 {
+		eventID = fmt.Sprintf("%d-%d", n.ServerID, n.ID)
+	}
+
 	return []models.Bounce{{
 		Email:        strings.ToLower(n.Email),
 		CampaignUUID: campUUID,
 		Type:         typ,
 		Source:       "postmark",
+		EventID:      eventID,
 		Meta:         json.RawMessage(b),
 		CreatedAt:    n.BouncedAt,
 	}}, nil

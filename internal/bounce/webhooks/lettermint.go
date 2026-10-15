@@ -121,6 +121,7 @@ func (l *Lettermint) ProcessBounce(sig string, body []byte) ([]models.Bounce, er
 		CampaignUUID: campUUID,
 		Type:         typ,
 		Source:       "lettermint",
+		EventID:      strings.TrimSpace(n.ID),
 		Meta:         json.RawMessage(body),
 		CreatedAt:    t,
 	}}, nil

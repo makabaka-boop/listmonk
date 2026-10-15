@@ -56,14 +56,35 @@ func (c *Core) GetBounce(id int) (models.Bounce, error) {
 	return out[0], nil
 }
 
-// RecordBounce records a new bounce.
+// recordBounceResult is the row returned by the `record-bounce` query.
+type recordBounceResult struct {
+	SubscriberID int  `db:"subscriber_id"`
+	Num          int  `db:"num"`
+	Inserted     bool `db:"inserted"`
+}
+
+// RecordBounce records a new bounce. Notifications carrying an event_id that
+// have already been recorded for the same source and subscriber are skipped
+// (no new row, no bounce action), making provider webhook re-deliveries
+// idempotent for as long as the original bounce record is retained.
 func (c *Core) RecordBounce(b models.Bounce) error {
 	action, ok := c.consts.BounceActions[b.Type]
 	if !ok {
 		return echo.NewHTTPError(http.StatusBadRequest, c.i18n.Ts("globals.messages.invalidData")+": "+b.Type)
 	}
 
-	_, err := c.q.RecordBounce.Exec(b.SubscriberUUID,
+	// The insert and the follow-up action must be atomic so that a duplicate
+	// that loses the insert race (ON CONFLICT) never runs the action.
+	tx, err := c.db.Beginx()
+	if err != nil {
+		c.log.Printf("error beginning bounce transaction: %v", err)
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var res recordBounceResult
+	if err := tx.Stmtx(c.q.RecordBounce).QueryRowx(
+		b.SubscriberUUID,
 		b.Email,
 		b.CampaignUUID,
 		b.Type,
@@ -71,19 +92,41 @@ func (c *Core) RecordBounce(b models.Bounce) error {
 		b.Meta,
 		b.CreatedAt,
 		action.Count,
-		action.Action)
-
-	if err != nil {
-		// Ignore the error if it complained of no subscriber.
-		if pqErr, ok := err.(*pq.Error); ok && pqErr.Column == "subscriber_id" {
-			c.log.Printf("bounced subscriber (%s / %s) not found", b.SubscriberUUID, b.Email)
-			return nil
-		}
-
+		strings.TrimSpace(b.EventID),
+	).StructScan(&res); err != nil {
 		c.log.Printf("error recording bounce: %v", err)
+		return err
 	}
 
-	return err
+	if res.SubscriberID == 0 {
+		// Subscriber does not exist. Nothing was recorded.
+		c.log.Printf("bounced subscriber (%s / %s) not found", b.SubscriberUUID, b.Email)
+		return nil
+	}
+
+	// Duplicate re-delivery, an already blocklisted subscriber, or a bounce
+	// beyond the configured threshold: nothing new was recorded.
+	if !res.Inserted || res.Num < action.Count {
+		return tx.Commit()
+	}
+
+	// Apply the configured action exactly once, alongside the insert.
+	switch action.Action {
+	case "blocklist":
+		_, err = tx.Stmtx(c.q.BlocklistBouncedSubscriber).Exec(res.SubscriberID)
+	case "unsubscribe":
+		_, err = tx.Stmtx(c.q.UnsubscribeBouncedSubscriber).Exec(res.SubscriberID)
+	case "delete":
+		_, err = tx.Stmtx(c.q.DeleteBouncedSubscriber).Exec(res.SubscriberID)
+	default:
+		// "none" or an unknown action. Nothing to do.
+	}
+	if err != nil {
+		c.log.Printf("error applying bounce action '%s': %v", action.Action, err)
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // BlocklistBouncedSubscribers blocklists subscribers matching bounce IDs or filters.

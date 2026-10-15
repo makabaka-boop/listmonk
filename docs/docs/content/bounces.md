@@ -32,15 +32,18 @@ The bounce webhook API can be used to record bounce events with custom scripting
 | campaign_uuid   | string |          | UUID of the campaign for which the bounce happened.                                  |
 | source          | string | Yes      | A string indicating the source, eg: `api`, `my_script` etc.                          |
 | type            | string | Yes      | `hard` or `soft` bounce. Currently, this has no effect on how the bounce is treated. |
+| event_id        | string |          | Unique identifier of the bounce event. Re-deliveries of the same `source` + `event_id` for a subscriber are recorded and counted only once as long as the bounce record is retained. Omit or leave empty to disable deduplication. |
 | meta            | string |          | An optional escaped JSON string with arbitrary metadata about the bounce event.      |
  
 
 ```shell
 curl -u 'api_username:access_token' -X POST 'http://localhost:9000/webhooks/bounce' \
 	-H "Content-Type: application/json" \
-	--data '{"email": "user1@mail.com", "campaign_uuid": "9f86b50d-5711-41c8-ab03-bc91c43d711b", "source": "api", "type": "hard", "meta": "{\"additional\": \"info\"}}'
+	--data '{"email": "user1@mail.com", "campaign_uuid": "9f86b50d-5711-41c8-ab03-bc91c43d711b", "source": "api", "type": "hard", "event_id": "evt_01JABCDEF", "meta": "{\"additional\": \"info\"}}'
 
 ```
+
+Re-delivered webhook notifications that carry a provider event identifier (SES SNS `MessageId`, SendGrid `sg_event_id`, Postmark `ServerID`-`ID`, Azure Event Grid event `id`, Lettermint event `id`, or the native `event_id` field) are deduplicated automatically. While the original bounce record still exists, a repeated notification for the same source, event identifier and subscriber is acknowledged normally but is not recorded again and does not retrigger the bounce count or the unsubscribe / blocklist / delete action. Different sources, events or subscribers are counted independently, and the subscriber may be identified by either `email` or `subscriber_uuid`.
 
 ## External webhooks
 listmonk supports receiving bounce webhook events from the following SMTP providers.
